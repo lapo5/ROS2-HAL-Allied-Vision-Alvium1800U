@@ -6,6 +6,7 @@ import threading
 import cv2
 import rclpy
 from rclpy.node import Node
+from pymba import *
 from vimba import *
 from typing import Optional
 from allied_vision_camera_interfaces.srv import CameraState
@@ -13,6 +14,10 @@ from cv_bridge import CvBridge
 
 from sensor_msgs.msg import Image
 from std_msgs.msg import Header
+
+import time
+from random import shuffle
+
 
 #import tf2_ros
 #import geometry_msgs
@@ -85,23 +90,6 @@ class AVNode(Node):
             except (AttributeError, VimbaFeatureError):
                 pass
 
-            '''
-            # Query available, open_cv compatible pixel formats
-            # prefer color formats over monochrome formats
-            cv_fmts = intersect_pixel_formats(cam.get_pixel_formats(), OPENCV_PIXEL_FORMATS)
-            color_fmts = intersect_pixel_formats(cv_fmts, COLOR_PIXEL_FORMATS)
-
-            if color_fmts:
-                cam.set_pixel_format(color_fmts[0])
-            else:
-                mono_fmts = intersect_pixel_formats(cv_fmts, MONO_PIXEL_FORMATS)
-
-                if mono_fmts:
-                    cam.set_pixel_format(mono_fmts[0])
-                else:
-                    abort('Camera does not support a OpenCV compatible format natively. Abort.')
-            '''
-
     
 
     def get_frame(self):
@@ -115,9 +103,18 @@ class AVNode(Node):
             with self.cam_obj as cam: 
             
                 while self.start_acquisition:
+
+                    t1 = time.time()
                     current_frame = cam.get_frame()
+                    t2 = time.time()
+                    #if current_frame.get_status() is FrameStatus.Complete:
                     self.frame = current_frame.as_numpy_ndarray()
+                    t3 = time.time()
                     self.publish_frame()
+                    diff = t2 - t1
+                    self.get_logger().info("Time cam.get_frame() -> %f" % diff)
+                    diff = t3 - t2
+                    self.get_logger().info("Time current_frame.as_numpy_ndarray() -> %f" % diff)
 
                 
 
@@ -168,9 +165,17 @@ class AVNode(Node):
                     self.get_logger().info("Frame acquisition has started.")
                     
                     while self.start_acquisition:
+                        t1 = time.time()
                         current_frame = self.cam_obj.acquire_frame()
+                        t2 = time.time()
                         self.frame = current_frame.buffer_data_numpy()
+                        t3 = time.time()
                         self.publish_frame()
+                        diff = t2 - t1
+                        self.get_logger().info("Time acquire_frame() -> %f" % diff)
+                        diff = t3 - t2
+                        self.get_logger().info("Time buffer_data_numpy() -> %f" % diff)
+                        
 
                     self.cam_obj.disarm()
                     self.cam_obj.close()
@@ -185,17 +190,25 @@ class AVNode(Node):
         self.thread1.join()
 
 
+
     # Publisher function
     def publish_frame(self):
         
         if len(self.frame) == 0:
             return
 
+        
         self.image_message = self.bridge.cv2_to_imgmsg(self.frame, encoding="mono8")
         self.image_message.header = Header()
         self.image_message.header.stamp = self.get_clock().now().to_msg()
         self.image_message.header.frame_id = "arm_camera_link"
+
+        #t1 = time.time()
         self.frame_pub.publish(self.image_message)
+        #t2 = time.time()
+        #diff = t2 - t1
+        #self.get_logger().info("Time -> %f" % diff)
+        
 
 
 
