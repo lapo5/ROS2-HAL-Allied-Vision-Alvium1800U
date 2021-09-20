@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 
 # Libraries
+import sys
+import threading
+import cv2
 import rclpy
 from rclpy.node import Node
-import cv2
-from pymba import *
-from sensor_msgs.msg import Image
+from vimba import *
+from typing import Optional
 from allied_vision_camera_interfaces.srv import CameraState
 from cv_bridge import CvBridge
-import threading
-import sys
 
+from sensor_msgs.msg import Image
 from std_msgs.msg import Header
-import tf2_ros
-import geometry_msgs
-from scipy.spatial.transform import Rotation as R
+
+#import tf2_ros
+#import geometry_msgs
+#from scipy.spatial.transform import Rotation as R
 
 # Class definition of the calibration function
 class AVNode(Node):
@@ -23,7 +25,7 @@ class AVNode(Node):
         self.get_logger().info("AV Camera node is awake...")
         
         # Parameters declaration
-        self.declare_parameter("cam_id", 1)
+        self.declare_parameter("cam_id", 0)
 
         # Class attributes
         self.cam_id = self.get_parameter("cam_id").value
@@ -36,10 +38,10 @@ class AVNode(Node):
         self.thread1.start()
 
         # Publishers
-        self.frame_pub = self.create_publisher(Image, "/parking_camera/raw_frame", 1)
+        self.frame_pub = self.create_publisher(Image, "/arm_camera/raw_frame", 1)
 
         # Service: stop acquisition
-        self.stop_service = self.create_service(CameraState, "/parking_camera/get_cam_state", self.acquisition_service)
+        self.stop_service = self.create_service(CameraState, "/arm_camera/get_cam_state", self.acquisition_service)
 
 
     # This function stops/enable the acquisition stream
@@ -47,10 +49,80 @@ class AVNode(Node):
         self.start_acquisition = request.command_state
         response.cam_state = self.start_acquisition
         return response
+    
+    
+    def get_camera(self, camera_id: Optional[str]) -> Camera:
+        with Vimba.get_instance() as vimba:
+            if camera_id:
+                try:
+                    return vimba.get_camera_by_id(camera_id)
 
+                except VimbaCameraError:
+                    self.get_logger().info("Failed to access Camera [" + camera_id + "]. Check connection.")
+                    self.cam_found = False
+
+            else:
+                cams = vimba.get_all_cameras()
+                if not cams:
+                    self.get_logger().info("No Cameras accessible.")
+                    self.cam_found = False
+
+                return cams[0]
+
+    
+
+    def setup_camera(self):
+        with self.cam_obj:
+            # Enable auto exposure time setting if camera supports it
+            try:
+                self.cam_obj.ExposureAuto.set('Continuous')
+            except (AttributeError, VimbaFeatureError):
+                pass
+            
+            # Enable white balancing if camera supports it
+            try:
+                self.cam_obj.BalanceWhiteAuto.set('Continuous')
+            except (AttributeError, VimbaFeatureError):
+                pass
+
+            '''
+            # Query available, open_cv compatible pixel formats
+            # prefer color formats over monochrome formats
+            cv_fmts = intersect_pixel_formats(cam.get_pixel_formats(), OPENCV_PIXEL_FORMATS)
+            color_fmts = intersect_pixel_formats(cv_fmts, COLOR_PIXEL_FORMATS)
+
+            if color_fmts:
+                cam.set_pixel_format(color_fmts[0])
+            else:
+                mono_fmts = intersect_pixel_formats(cv_fmts, MONO_PIXEL_FORMATS)
+
+                if mono_fmts:
+                    cam.set_pixel_format(mono_fmts[0])
+                else:
+                    abort('Camera does not support a OpenCV compatible format natively. Abort.')
+            '''
+
+    
+
+    def get_frame(self):
+    
+        with Vimba.get_instance () as vimba :
+        #    cams = vimba. get_all_cameras ()
+            self.cam_obj = self.get_camera("")
+            self.setup_camera()
+
+            self.get_logger().info("Frame acquisition has started.")
+            with self.cam_obj as cam: 
+            
+                while self.start_acquisition:
+                    current_frame = cam.get_frame()
+                    self.frame = current_frame.as_numpy_ndarray()
+                    self.publish_frame()
+
+                
 
     # This function save the current frame in a class attribute
-    def get_frame(self):
+    def get_frame_old(self):
 
         with Vimba() as vimba:
 
@@ -113,7 +185,6 @@ class AVNode(Node):
         self.thread1.join()
 
 
-
     # Publisher function
     def publish_frame(self):
         
@@ -123,7 +194,7 @@ class AVNode(Node):
         self.image_message = self.bridge.cv2_to_imgmsg(self.frame, encoding="mono8")
         self.image_message.header = Header()
         self.image_message.header.stamp = self.get_clock().now().to_msg()
-        self.image_message.header.frame_id = "parking_camera_link"
+        self.image_message.header.frame_id = "arm_camera_link"
         self.frame_pub.publish(self.image_message)
 
 
